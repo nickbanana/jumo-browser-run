@@ -1,4 +1,4 @@
-import { Stagehand } from "@browserbasehq/stagehand";
+import { Stagehand, type LogLine } from "@browserbasehq/stagehand";
 import { endpointURLString } from "@cloudflare/playwright";
 import { z } from "zod";
 
@@ -19,13 +19,16 @@ function serializeError(err: unknown) {
 	return { message: err.message, chain };
 }
 
-async function extractOnce(target: string, env: Env) {
+async function extractOnce(target: string, env: Env, logs: LogLine[]) {
 	const stagehand = new Stagehand({
 		env: "LOCAL",
 		localBrowserLaunchOptions: { cdpUrl: endpointURLString(env.BROWSER) },
 		modelName: MODEL,
 		modelClientOptions: { apiKey: env.GOOGLE_API_KEY },
 		verbose: 1,
+		logger: (line) => {
+			logs.push(line);
+		},
 	});
 
 	try {
@@ -52,13 +55,14 @@ export default {
 		}
 
 		const target = url.searchParams.get("url") ?? "https://simplepage.eth.link/";
+		const logs: LogLine[] = [];
 
 		try {
-			const extracted = await extractOnce(target, env);
+			const extracted = await extractOnce(target, env, logs);
 			return Response.json({ ok: true, model: MODEL, target, extracted });
 		} catch (err) {
 			return Response.json(
-				{ ok: false, model: MODEL, target, error: serializeError(err) },
+				{ ok: false, model: MODEL, target, error: serializeError(err), logs },
 				{ status: 500 },
 			);
 		}
