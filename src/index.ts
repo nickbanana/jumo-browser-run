@@ -51,7 +51,7 @@ export default {
 	async fetch(request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
 		if (url.pathname === "/favicon.ico") {
-			return new Response(null, { status: 404 });
+			return new Response(null, { status: 200 });
 		}
 
 		const target = url.searchParams.get("url") ?? "https://simplepage.eth.link/";
