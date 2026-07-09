@@ -5,6 +5,21 @@ import { z } from "zod";
 const MODEL = "google/gemini-3-flash-preview";
 const MAX_INIT_ATTEMPTS = 3;
 
+function serializeError(err: unknown) {
+	if (!(err instanceof Error)) return { message: String(err) };
+	const chain = [];
+	let current: unknown = err;
+	while (current instanceof Error) {
+		chain.push({
+			name: current.name,
+			message: current.message,
+			stack: current.stack,
+		});
+		current = (current as { causedBy?: unknown; cause?: unknown }).causedBy ?? current.cause;
+	}
+	return { message: err.message, chain };
+}
+
 async function extractOnce(target: string, env: Env) {
 	const stagehand = new Stagehand({
 		env: "LOCAL",
@@ -29,8 +44,12 @@ async function extractOnce(target: string, env: Env) {
 
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
-		const target =
-			new URL(request.url).searchParams.get("url") ?? "https://simplepage.eth.link/";
+		const url = new URL(request.url);
+		if (url.pathname === "/favicon.ico") {
+			return new Response(null, { status: 404 });
+		}
+
+		const target = url.searchParams.get("url") ?? "https://simplepage.eth.link/";
 
 		for (let attempt = 1; attempt <= MAX_INIT_ATTEMPTS; attempt++) {
 			try {
@@ -40,7 +59,7 @@ export default {
 				const isInitRace = err instanceof StagehandNotInitializedError;
 				if (!isInitRace || attempt === MAX_INIT_ATTEMPTS) {
 					return Response.json(
-						{ ok: false, model: MODEL, target, error: String(err) },
+						{ ok: false, model: MODEL, target, attempt, error: serializeError(err) },
 						{ status: 500 },
 					);
 				}
