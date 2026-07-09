@@ -1,5 +1,5 @@
 import { Stagehand } from "@browserbasehq/stagehand";
-import { endpointURLString } from "@cloudflare/playwright";
+import { chromium, endpointURLString } from "@cloudflare/playwright";
 import { z } from "zod";
 
 const MODEL = "google/gemini-3-flash-preview";
@@ -17,6 +17,17 @@ function serializeError(err: unknown) {
 		current = (current as { causedBy?: unknown; cause?: unknown }).causedBy ?? current.cause;
 	}
 	return { message: err.message, chain };
+}
+
+async function probeCdp(env: Env) {
+	try {
+		const browser = await chromium.connectOverCDP(endpointURLString(env.BROWSER));
+		const contextCount = browser.contexts().length;
+		await browser.close().catch(() => {});
+		return { ok: true, contextCount };
+	} catch (err) {
+		return { ok: false, error: serializeError(err) };
+	}
 }
 
 async function extractOnce(target: string, env: Env) {
@@ -52,13 +63,14 @@ export default {
 		}
 
 		const target = url.searchParams.get("url") ?? "https://simplepage.eth.link/";
+		const cdpProbe = await probeCdp(env);
 
 		try {
 			const extracted = await extractOnce(target, env);
-			return Response.json({ ok: true, model: MODEL, target, extracted });
+			return Response.json({ ok: true, model: MODEL, target, cdpProbe, extracted });
 		} catch (err) {
 			return Response.json(
-				{ ok: false, model: MODEL, target, error: serializeError(err) },
+				{ ok: false, model: MODEL, target, cdpProbe, error: serializeError(err) },
 				{ status: 500 },
 			);
 		}
