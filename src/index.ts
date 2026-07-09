@@ -1,9 +1,8 @@
-import { Stagehand, StagehandNotInitializedError } from "@browserbasehq/stagehand";
+import { Stagehand } from "@browserbasehq/stagehand";
 import { endpointURLString } from "@cloudflare/playwright";
 import { z } from "zod";
 
 const MODEL = "google/gemini-3-flash-preview";
-const MAX_INIT_ATTEMPTS = 3;
 
 function serializeError(err: unknown) {
 	if (!(err instanceof Error)) return { message: String(err) };
@@ -38,7 +37,10 @@ async function extractOnce(target: string, env: Env) {
 			schema: z.object({ title: z.string(), summary: z.string() }),
 		});
 	} finally {
-		await stagehand.close();
+		// stagehand.close() itself throws StagehandNotInitializedError when
+		// init() failed before setting up the browser context, which would
+		// otherwise mask the real error from the try block above.
+		await stagehand.close().catch(() => {});
 	}
 }
 
@@ -51,25 +53,14 @@ export default {
 
 		const target = url.searchParams.get("url") ?? "https://simplepage.eth.link/";
 
-		for (let attempt = 1; attempt <= MAX_INIT_ATTEMPTS; attempt++) {
-			try {
-				const extracted = await extractOnce(target, env);
-				return Response.json({ ok: true, model: MODEL, target, extracted });
-			} catch (err) {
-				const isInitRace = err instanceof StagehandNotInitializedError;
-				if (!isInitRace || attempt === MAX_INIT_ATTEMPTS) {
-					return Response.json(
-						{ ok: false, model: MODEL, target, attempt, error: serializeError(err) },
-						{ status: 500 },
-					);
-				}
-				// connectOverCDP resolves before Playwright receives the CDP
-				// target-attached event, so browser.contexts() can briefly be
-				// empty; retrying with a fresh session clears it.
-			}
+		try {
+			const extracted = await extractOnce(target, env);
+			return Response.json({ ok: true, model: MODEL, target, extracted });
+		} catch (err) {
+			return Response.json(
+				{ ok: false, model: MODEL, target, error: serializeError(err) },
+				{ status: 500 },
+			);
 		}
-
-		// unreachable, satisfies TypeScript's control-flow analysis
-		throw new Error("unreachable");
 	},
 } satisfies ExportedHandler<Env>;
