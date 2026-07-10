@@ -1,5 +1,6 @@
 import "./als-shim";
 import { Stagehand, type LogLine } from "@browserbasehq/stagehand";
+import { endpointURLString } from "@cloudflare/playwright";
 import { z } from "zod";
 
 const MODEL = "google/gemini-3-flash-preview";
@@ -68,14 +69,13 @@ async function testDirectCdp(env: Env) {
 }
 
 async function testStagehandV3(env: Env) {
-	const cdpUrl = `wss://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/browser-rendering/devtools/browser?keep_alive=60000`;
+	const cdpUrl = endpointURLString(env.BROWSER);
 	const logs: LogLine[] = [];
 
 	const stagehand = new Stagehand({
 		env: "LOCAL",
 		localBrowserLaunchOptions: {
 			cdpUrl,
-			cdpHeaders: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
 		},
 		model: { modelName: MODEL, apiKey: env.GOOGLE_API_KEY },
 		verbose: 1,
