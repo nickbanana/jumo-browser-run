@@ -1,3 +1,4 @@
+import "./als-shim";
 import { Stagehand, type LogLine } from "@browserbasehq/stagehand";
 import { z } from "zod";
 
@@ -17,39 +18,6 @@ function serializeError(err: unknown) {
 		current = (current as { causedBy?: unknown; cause?: unknown }).causedBy ?? current.cause;
 	}
 	return { message: err.message, chain };
-}
-
-async function extractOnce(target: string, env: Env, logs: LogLine[]) {
-	const cdpUrl = `wss://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/browser-rendering/devtools/browser?keep_alive=60000`;
-
-	const stagehand = new Stagehand({
-		env: "LOCAL",
-		localBrowserLaunchOptions: {
-			cdpUrl,
-			extraHTTPHeaders: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
-		},
-		modelName: MODEL,
-		modelClientOptions: { apiKey: env.GOOGLE_API_KEY },
-		verbose: 1,
-		logger: (line) => {
-			logs.push(line);
-		},
-	});
-
-	try {
-		await stagehand.init();
-		const page = stagehand.page;
-		await page.goto(target, { waitUntil: "domcontentloaded" });
-		return await page.extract({
-			instruction: "Extract the page's main heading and a one-sentence summary.",
-			schema: z.object({ title: z.string(), summary: z.string() }),
-		});
-	} finally {
-		// stagehand.close() itself throws StagehandNotInitializedError when
-		// init() failed before setting up the browser context, which would
-		// otherwise mask the real error from the try block above.
-		await stagehand.close().catch(() => {});
-	}
 }
 
 async function testDirectCdp(env: Env) {
@@ -99,6 +67,38 @@ async function testDirectCdp(env: Env) {
 	});
 }
 
+async function testStagehandV3(env: Env) {
+	const cdpUrl = `wss://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/browser-rendering/devtools/browser?keep_alive=60000`;
+	const logs: LogLine[] = [];
+
+	const stagehand = new Stagehand({
+		env: "LOCAL",
+		localBrowserLaunchOptions: {
+			cdpUrl,
+			cdpHeaders: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
+		},
+		model: { modelName: MODEL, apiKey: env.GOOGLE_API_KEY },
+		verbose: 1,
+		logger: (line: LogLine) => {
+			logs.push(line);
+		},
+	});
+
+	try {
+		await stagehand.init();
+		const page = stagehand.context.activePage();
+		if (!page) throw new Error("no active page after init()");
+		await page.goto("https://simplepage.eth.link/", { waitUntil: "domcontentloaded" });
+		const extracted = await stagehand.extract(
+			"Extract the page's main heading and a one-sentence summary.",
+			z.object({ title: z.string(), summary: z.string() }),
+		);
+		return { ok: true, extracted, logs };
+	} finally {
+		await stagehand.close().catch(() => {});
+	}
+}
+
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
@@ -115,17 +115,10 @@ export default {
 			return Response.json(result);
 		}
 
-		const target = url.searchParams.get("url") ?? "https://simplepage.eth.link/";
-		const logs: LogLine[] = [];
-
-		try {
-			const extracted = await extractOnce(target, env, logs);
-			return Response.json({ ok: true, model: MODEL, target, extracted });
-		} catch (err) {
-			return Response.json(
-				{ ok: false, model: MODEL, target, error: serializeError(err), logs },
-				{ status: 500 },
-			);
-		}
+		const result = await testStagehandV3(env).catch((err) => ({
+			ok: false,
+			error: serializeError(err),
+		}));
+		return Response.json(result);
 	},
 } satisfies ExportedHandler<Env>;
