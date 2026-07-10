@@ -3,6 +3,7 @@ import { endpointURLString } from "@cloudflare/playwright";
 import { z } from "zod";
 
 const MODEL = "google/gemini-3-flash-preview";
+const CLOUDFLARE_ACCOUNT_ID = "692696df11d629053d7b8f1cb2243ca0";
 
 function serializeError(err: unknown) {
 	if (!(err instanceof Error)) return { message: String(err) };
@@ -47,11 +48,67 @@ async function extractOnce(target: string, env: Env, logs: LogLine[]) {
 	}
 }
 
+async function testDirectCdp(env: Env) {
+	const cdpUrl = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/browser-rendering/devtools/browser?keep_alive=60000`;
+
+	const response = await fetch(cdpUrl, {
+		headers: {
+			Upgrade: "websocket",
+			Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
+		},
+	});
+
+	if (!response.webSocket) {
+		return {
+			ok: false,
+			stage: "upgrade",
+			status: response.status,
+			statusText: response.statusText,
+			body: await response.text().catch(() => "<unreadable>"),
+		};
+	}
+
+	const ws = response.webSocket;
+	ws.accept();
+
+	return await new Promise((resolve) => {
+		const timeout = setTimeout(() => {
+			resolve({ ok: false, stage: "cdp-roundtrip", error: "timed out waiting for CDP response" });
+		}, 8000);
+
+		ws.addEventListener("message", (event: MessageEvent) => {
+			clearTimeout(timeout);
+			ws.close();
+			resolve({
+				ok: true,
+				stage: "cdp-roundtrip",
+				message: typeof event.data === "string" ? event.data : "<binary frame>",
+			});
+		});
+
+		ws.addEventListener("error", (event: Event) => {
+			clearTimeout(timeout);
+			resolve({ ok: false, stage: "cdp-roundtrip", error: String(event) });
+		});
+
+		ws.send(JSON.stringify({ id: 1, method: "Target.getBrowserContexts" }));
+	});
+}
+
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
 		if (url.pathname === "/favicon.ico") {
 			return new Response(null, { status: 200 });
+		}
+
+		if (url.pathname === "/direct-cdp-test") {
+			const result = await testDirectCdp(env).catch((err) => ({
+				ok: false,
+				stage: "exception",
+				error: serializeError(err),
+			}));
+			return Response.json(result);
 		}
 
 		const target = url.searchParams.get("url") ?? "https://simplepage.eth.link/";
