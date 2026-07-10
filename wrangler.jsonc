@@ -16,9 +16,6 @@
 	],
 	"browser": {
 		"binding": "BROWSER"
-	},
-	"alias": {
-		"playwright": "@cloudflare/playwright"
 	}
 	/**
 	 * Smart Placement
