@@ -1,4 +1,5 @@
 import { Stagehand, type LogLine } from "@browserbasehq/stagehand";
+import { Stagehand as StagehandV3 } from "stagehand-v3";
 import { endpointURLString } from "@cloudflare/playwright";
 import { z } from "zod";
 
@@ -95,6 +96,38 @@ async function testDirectCdp(env: Env) {
 	});
 }
 
+async function testStagehandV3(env: Env) {
+	const cdpUrl = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/browser-rendering/devtools/browser?keep_alive=60000`;
+	const logs: LogLine[] = [];
+
+	const stagehand = new StagehandV3({
+		env: "LOCAL",
+		localBrowserLaunchOptions: {
+			cdpUrl,
+			cdpHeaders: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
+		},
+		model: { modelName: MODEL, apiKey: env.GOOGLE_API_KEY },
+		verbose: 1,
+		logger: (line: LogLine) => {
+			logs.push(line);
+		},
+	});
+
+	try {
+		await stagehand.init();
+		const page = stagehand.context.activePage();
+		if (!page) throw new Error("no active page after init()");
+		await page.goto("https://simplepage.eth.link/", { waitUntil: "domcontentloaded" });
+		const extracted = await stagehand.extract(
+			"Extract the page's main heading and a one-sentence summary.",
+			z.object({ title: z.string(), summary: z.string() }),
+		);
+		return { ok: true, extracted, logs };
+	} finally {
+		await stagehand.close().catch(() => {});
+	}
+}
+
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
@@ -106,6 +139,14 @@ export default {
 			const result = await testDirectCdp(env).catch((err) => ({
 				ok: false,
 				stage: "exception",
+				error: serializeError(err),
+			}));
+			return Response.json(result);
+		}
+
+		if (url.pathname === "/stagehand-v3-test") {
+			const result = await testStagehandV3(env).catch((err) => ({
+				ok: false,
 				error: serializeError(err),
 			}));
 			return Response.json(result);
